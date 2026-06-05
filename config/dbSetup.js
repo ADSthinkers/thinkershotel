@@ -324,8 +324,20 @@ export async function ensureDatabaseExists() {
     password: dbPassword,
   });
 
+  const [existingDatabases] = await connection.query('SHOW DATABASES LIKE ?', [dbName]);
+  const existed = existingDatabases.length > 0;
+
   await connection.query(`CREATE DATABASE IF NOT EXISTS \`${dbName}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
   await connection.end();
+
+  return {
+    created: !existed,
+    existed,
+    database: dbName,
+    host: dbHost || 'localhost',
+    port: dbPort ? Number(dbPort) : 3306,
+    user: dbUser,
+  };
 }
 
 export async function setupDatabaseObjects(sequelize) {
@@ -333,4 +345,11 @@ export async function setupDatabaseObjects(sequelize) {
   await createReportTable(sequelize);
   await createReportTriggers(sequelize);
   await createStoredProcedures(sequelize);
+
+  return {
+    systemUsersTable: 'usuarios_sistema',
+    reportTable: 'relatorio_dados_bd',
+    reportTriggers: Object.keys(TABLES).length * 3,
+    storedProcedures: 15,
+  };
 }
