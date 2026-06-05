@@ -16,19 +16,27 @@ export type Client = {
 
 export type Reservation = {
   id: string;
+  clientId?: string | null;
   guest: string;
   room: string;
   checkIn: string;
   checkOut: string;
+  rawCheckIn?: string;
+  rawCheckOut?: string;
   status: ReservationStatus;
   amount: string;
+  rawAmount?: number;
 };
 
 export type StayEvent = {
   id: string;
+  sourceId?: string;
+  reservationId?: string | null;
+  clientId?: string | null;
   guest: string;
   room: string;
   type: StayEventType;
+  date?: string;
   time: string;
   status: StayEventStatus;
   phone: string;

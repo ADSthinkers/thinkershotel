@@ -22,7 +22,7 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
-import { useHotelData } from '@/context/HotelDataContext';
+import { UserAccount, UserRole, UserStatus, SystemLog, useHotelData } from '@/context/HotelDataContext';
 import { Client, ClientStatus, Reservation, ReservationStatus, ROOM_RATES, RoomType, StayEvent } from '@/data/hotelData';
 
 type TabKey = 'dashboard' | 'reservas' | 'checkin' | 'clientes' | 'config';
@@ -39,6 +39,7 @@ type DetailTarget =
   | { type: 'client'; id: string }
   | { type: 'stay'; id: string }
   | { type: 'profile' }
+  | { type: 'logs' }
   | null;
 type ProfileData = {
   name: string;
@@ -223,6 +224,35 @@ function normalize(value: string) {
   return value.toLowerCase().trim();
 }
 
+function toDateInputValue(date: Date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
+function parseDateInput(value?: string) {
+  if (!value) return null;
+  const [year, month, day] = value.split('-').map(Number);
+  if (!year || !month || !day) return null;
+  const date = new Date(year, month - 1, day);
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function addCalendarMonths(date: Date, amount: number) {
+  return new Date(date.getFullYear(), date.getMonth() + amount, 1);
+}
+
+function getCalendarDays(monthDate: Date) {
+  const firstDay = new Date(monthDate.getFullYear(), monthDate.getMonth(), 1);
+  const totalDays = new Date(monthDate.getFullYear(), monthDate.getMonth() + 1, 0).getDate();
+  const leadingEmptyDays = firstDay.getDay();
+  return [
+    ...Array.from({ length: leadingEmptyDays }, () => null),
+    ...Array.from({ length: totalDays }, (_, index) => new Date(monthDate.getFullYear(), monthDate.getMonth(), index + 1)),
+  ];
+}
+
 function formatStatus(status: ReservationStatus | ClientStatus | StayEvent['status']) {
   return status === 'Concluido' ? 'Concluído' : status;
 }
@@ -233,6 +263,20 @@ function notify(title: string, message: string) {
     return;
   }
   Alert.alert(title, message);
+}
+
+function confirmAction(title: string, message: string, onConfirm: () => void | Promise<void>, destructive?: boolean) {
+  if (Platform.OS === 'web') {
+    if (window.confirm(`${title}\n${message}`)) {
+      onConfirm();
+    }
+    return;
+  }
+
+  Alert.alert(title, message, [
+    { text: 'Voltar', style: 'cancel' },
+    { text: 'Confirmar', style: destructive ? 'destructive' : 'default', onPress: onConfirm },
+  ]);
 }
 
 async function sendSystemNotification(title: string, body: string) {
@@ -553,7 +597,16 @@ function StayEventCard({ item, compact, onPress }: { item: StayEvent; compact?: 
               label={isDone ? 'Realizado' : item.type === 'Check-in' ? 'Fazer check-in' : 'Fazer check-out'}
               style={styles.smallButton}
               textStyle={styles.smallButtonText}
-              onPress={() => performCheckInOrOut(item.id, 'Concluido')}
+              onPress={() =>
+                confirmAction(item.type, `Confirmar ${item.type.toLowerCase()} de ${item.guest}?`, async () => {
+                  try {
+                    await performCheckInOrOut(item.id, 'Concluido');
+                    notify(item.type, `${item.type} realizado.`);
+                  } catch (requestError) {
+                    notify('Check-in/out', requestError instanceof Error ? requestError.message : 'Não foi possível concluir o fluxo.');
+                  }
+                })
+              }
             />
           </View>
         </View>
@@ -677,6 +730,82 @@ function LiquidSegmentedControl<T extends string>({ options, value, onChange }: 
   return <View style={styles.segmented}>{buttons}</View>;
 }
 
+function DatePickerField({ label, value, onChange }: { label: string; value: string; onChange: (value: string) => void }) {
+  const { darkMode } = useVisual();
+  const [open, setOpen] = useState(false);
+  const selectedDate = parseDateInput(value);
+  const [visibleMonth, setVisibleMonth] = useState(() => selectedDate || new Date());
+  const monthLabel = visibleMonth.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+  const days = getCalendarDays(visibleMonth);
+
+  useEffect(() => {
+    if (selectedDate) setVisibleMonth(selectedDate);
+  }, [value]);
+
+  return (
+    <View style={styles.dateField}>
+      <Pressable onPress={() => setOpen(true)} style={[styles.input, styles.dateButton, darkMode && styles.surfaceDark]}>
+        <Text style={[styles.infoLabel, darkMode && styles.subtitleDark]}>{label}</Text>
+        <Text style={[styles.dateButtonText, darkMode && styles.titleDark]}>{value || 'Selecionar data'}</Text>
+      </Pressable>
+      <Modal visible={open} transparent animationType="fade" onRequestClose={() => setOpen(false)}>
+        <View style={styles.confirmOverlay}>
+          <View style={[styles.calendarDialog, darkMode && styles.surfaceDark]}>
+            <View style={styles.calendarHeader}>
+              <Pressable style={styles.calendarNavButton} onPress={() => setVisibleMonth((current) => addCalendarMonths(current, -1))}>
+                <AppIcon name={{ ios: 'chevron.left', android: 'chevron_left', web: 'chevron_left' }} size={18} />
+              </Pressable>
+              <Text style={[styles.calendarTitle, darkMode && styles.titleDark]}>{monthLabel}</Text>
+              <Pressable style={styles.calendarNavButton} onPress={() => setVisibleMonth((current) => addCalendarMonths(current, 1))}>
+                <AppIcon name={{ ios: 'chevron.right', android: 'chevron_right', web: 'chevron_right' }} size={18} />
+              </Pressable>
+            </View>
+            <View style={styles.weekdayRow}>
+              {['D', 'S', 'T', 'Q', 'Q', 'S', 'S'].map((day, index) => (
+                <Text key={`${day}-${index}`} style={styles.weekdayText}>
+                  {day}
+                </Text>
+              ))}
+            </View>
+            <View style={styles.calendarGrid}>
+              {days.map((date, index) => {
+                const dateValue = date ? toDateInputValue(date) : '';
+                const active = dateValue === value;
+                return (
+                  <Pressable
+                    key={dateValue || `empty-${index}`}
+                    disabled={!date}
+                    style={[styles.calendarDay, active && styles.calendarDayActive]}
+                    onPress={() => {
+                      if (!date) return;
+                      onChange(dateValue);
+                      setOpen(false);
+                    }}>
+                    <Text style={[styles.calendarDayText, active && styles.calendarDayTextActive]}>{date ? date.getDate() : ''}</Text>
+                  </Pressable>
+                );
+              })}
+            </View>
+            <View style={styles.confirmActions}>
+              <Pressable style={styles.confirmCancelButton} onPress={() => setOpen(false)}>
+                <Text style={styles.secondaryButtonText}>Cancelar</Text>
+              </Pressable>
+              <Pressable
+                style={styles.confirmDeleteButton}
+                onPress={() => {
+                  onChange(toDateInputValue(new Date()));
+                  setOpen(false);
+                }}>
+                <Text style={styles.loginButtonText}>Hoje</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    </View>
+  );
+}
+
 function ConfigScreen({
   bottomInset,
   profile,
@@ -685,7 +814,10 @@ function ConfigScreen({
   reservationNotifications,
   dailyCheckinNotifications,
   notifications,
+  users,
   onEditProfile,
+  onCreateUser,
+  onEditUser,
   onToggleDarkMode,
   onToggleCompactMenu,
   onToggleReservationNotifications,
@@ -693,6 +825,7 @@ function ConfigScreen({
   onAddNotification,
   onMarkNotificationsRead,
   onClearNotifications,
+  onShowLogs,
 }: {
   bottomInset: number;
   profile: ProfileData;
@@ -701,7 +834,10 @@ function ConfigScreen({
   reservationNotifications: boolean;
   dailyCheckinNotifications: boolean;
   notifications: AppNotification[];
+  users: UserAccount[];
   onEditProfile: () => void;
+  onCreateUser: () => void;
+  onEditUser: (userId: string) => void;
   onToggleDarkMode: (value: boolean) => void;
   onToggleCompactMenu: (value: boolean) => void;
   onToggleReservationNotifications: (value: boolean) => void;
@@ -709,6 +845,7 @@ function ConfigScreen({
   onAddNotification: (notification: Omit<AppNotification, 'id' | 'time' | 'read'>) => void;
   onMarkNotificationsRead: () => void;
   onClearNotifications: () => void;
+  onShowLogs: () => void;
 }) {
   const unreadCount = notifications.filter((item) => !item.read).length;
   return (
@@ -721,6 +858,23 @@ function ConfigScreen({
         <InfoRow label="Hotel" value={profile.hotelName} />
         <InfoRow label="Região" value={`${profile.region} · ${profile.timezone} · ${profile.currency}`} />
         <LiquidButton label="Editar perfil e região" onPress={onEditProfile} style={styles.fullWidthButton} textStyle={styles.smallButtonText} />
+      </SettingsCard>
+      <SettingsCard title="Sistema" subtitle="Ferramentas administrativas.">
+        <LiquidButton label="Ver logs de atividades" onPress={onShowLogs} style={styles.fullWidthButton} textStyle={styles.smallButtonText} />
+      </SettingsCard>
+      <SettingsCard title="Usuários" subtitle="Acessos do painel operacional.">
+        {users.map((user) => (
+          <View key={user.id} style={styles.managementRow}>
+            <View style={styles.cardMain}>
+              <Text style={[styles.toggleTitle, darkMode && styles.titleDark]}>{user.name}</Text>
+              <Text style={[styles.cardSubtitle, darkMode && styles.subtitleDark]}>
+                {user.login} · {user.role} · {user.status}
+              </Text>
+            </View>
+            <LiquidButton label="Editar" onPress={() => onEditUser(user.id)} style={styles.inlineActionButton} textStyle={styles.secondaryActionText} />
+          </View>
+        ))}
+        <LiquidButton label="Novo usuário" onPress={onCreateUser} style={styles.fullWidthButton} textStyle={styles.smallButtonText} />
       </SettingsCard>
       <SettingsCard title="Preferências" subtitle="Aparência e comportamento.">
         <ToggleRow title="Modo escuro" subtitle="Alternar tema escuro do painel." value={darkMode} onValueChange={onToggleDarkMode} />
@@ -885,7 +1039,7 @@ function ProfileEditScreen({
     hotelOptions.find((hotel) => hotel.region === draft.region) ||
     hotelOptions[0];
 
-  function save() {
+  async function save() {
     onSave(draft);
     notify('Perfil', 'Dados do perfil e região atualizados.');
     onBack();
@@ -919,8 +1073,9 @@ function ProfileEditScreen({
   );
 }
 
-function ReservationDetailScreen({ id, bottomInset, onBack }: { id: string; bottomInset: number; onBack: () => void }) {
-  const { reservations, checkIns, clients } = useHotelData();
+function ReservationDetailScreen({ id, bottomInset, onBack, onEdit }: { id: string; bottomInset: number; onBack: () => void; onEdit: (reservationId: string) => void }) {
+  const { reservations, checkIns, clients, cancelReservation, deleteReservation } = useHotelData();
+  const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const reservation = reservations.find((item) => item.id === id);
 
   if (!reservation) {
@@ -932,9 +1087,39 @@ function ReservationDetailScreen({ id, bottomInset, onBack }: { id: string; bott
     );
   }
 
-  const roomNumber = reservation.room.split(' - ')[0];
-  const stayEvent = checkIns.find((item) => item.guest === reservation.guest && item.room === roomNumber);
-  const client = clients.find((item) => item.name === reservation.guest);
+  const currentReservation = reservation;
+  const roomNumber = currentReservation.room.split(' - ')[0];
+  const stayEvent = checkIns.find((item) => item.guest === currentReservation.guest && item.room === roomNumber);
+  const client = clients.find((item) => item.name === currentReservation.guest);
+  const isCanceled = currentReservation.status === 'Cancelada';
+  const hasEffectiveCheckIn = currentReservation.status === 'Check-in' || currentReservation.status === 'Check-out' || checkIns.some((item) => item.type === 'Check-in' && item.reservationId === currentReservation.id && item.status === 'Concluido');
+
+  function handleCancelReservation() {
+    if (hasEffectiveCheckIn) {
+      notify('Reserva', 'Não é possível cancelar reserva com check-in efetivado.');
+      return;
+    }
+
+    confirmAction('Cancelar reserva', `A reserva ${currentReservation.id} será marcada como cancelada. Esta ação manterá o histórico da reserva.`, async () => {
+      try {
+        await cancelReservation(currentReservation.id);
+        notify('Reserva cancelada', `A reserva ${currentReservation.id} foi cancelada.`);
+      } catch (requestError) {
+        notify('Reserva', requestError instanceof Error ? requestError.message : 'Não foi possível cancelar a reserva.');
+      }
+    });
+  }
+
+  async function handleDeleteReservation() {
+    try {
+      await deleteReservation(currentReservation.id);
+      setDeleteConfirmOpen(false);
+      notify('Reserva deletada', `A reserva ${currentReservation.id} foi removida do sistema.`);
+      onBack();
+    } catch (requestError) {
+      notify('Reserva', requestError instanceof Error ? requestError.message : 'Não foi possível deletar a reserva.');
+    }
+  }
 
   return (
     <ScreenScroll bottomInset={bottomInset}>
@@ -971,12 +1156,61 @@ function ReservationDetailScreen({ id, bottomInset, onBack }: { id: string; bott
         <InfoBlock label="Status" value={stayEvent ? formatStatus(stayEvent.status) : '-'} />
         <InfoBlock label="Quarto" value={stayEvent?.room || roomNumber} />
       </DetailSection>
+      <DetailSection title="Ações da reserva">
+        <Text style={styles.actionWarningText}>Cancelar preserva o histórico. Deletar remove a reserva e o fluxo operacional vinculado.</Text>
+        <View style={styles.reservationActionRow}>
+          <LiquidButton
+            label="Editar reserva"
+            onPress={() => onEdit(currentReservation.id)}
+            style={[styles.reservationActionButton, styles.secondaryActionButton]}
+            textStyle={styles.secondaryActionText}
+          />
+          <LiquidButton
+            disabled={isCanceled || hasEffectiveCheckIn}
+            label={isCanceled ? 'Reserva cancelada' : hasEffectiveCheckIn ? 'Check-in efetivado' : 'Cancelar reserva'}
+            onPress={handleCancelReservation}
+            style={[styles.reservationActionButton, styles.warningButton]}
+            textStyle={styles.smallButtonText}
+          />
+          <LiquidButton
+            label="Deletar reserva"
+            onPress={() =>
+              confirmAction(
+                'Deletar reserva',
+                `Você está prestes a deletar a reserva ${reservation.id}. Um modal adicional será exibido para confirmar a remoção definitiva.`,
+                () => setDeleteConfirmOpen(true),
+                true
+              )
+            }
+            style={[styles.reservationActionButton, styles.dangerButton]}
+            textStyle={styles.smallButtonText}
+          />
+        </View>
+      </DetailSection>
+      <Modal visible={deleteConfirmOpen} animationType="fade" transparent onRequestClose={() => setDeleteConfirmOpen(false)}>
+        <View style={styles.confirmOverlay}>
+          <View style={styles.confirmDialog}>
+            <Text style={styles.confirmTitle}>Confirmar exclusão</Text>
+            <Text style={styles.confirmMessage}>
+              Esta ação vai remover definitivamente a reserva {reservation.id} de {reservation.guest}. O check-in/check-out vinculado também será removido.
+            </Text>
+            <View style={styles.confirmActions}>
+              <Pressable style={styles.confirmCancelButton} onPress={() => setDeleteConfirmOpen(false)}>
+                <Text style={styles.secondaryButtonText}>Voltar</Text>
+              </Pressable>
+              <Pressable style={styles.confirmDeleteButton} onPress={handleDeleteReservation}>
+                <Text style={styles.loginButtonText}>Deletar</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </ScreenScroll>
   );
 }
 
-function ClientDetailScreen({ id, bottomInset, onBack }: { id: string; bottomInset: number; onBack: () => void }) {
-  const { clients, reservations, checkIns } = useHotelData();
+function ClientDetailScreen({ id, bottomInset, onBack, onEdit }: { id: string; bottomInset: number; onBack: () => void; onEdit: (clientId: string) => void }) {
+  const { clients, reservations, checkIns, deleteClient } = useHotelData();
   const client = clients.find((item) => item.id === id);
 
   if (!client) {
@@ -990,6 +1224,26 @@ function ClientDetailScreen({ id, bottomInset, onBack }: { id: string; bottomIns
 
   const clientReservations = reservations.filter((item) => item.guest === client.name);
   const clientEvents = checkIns.filter((item) => item.guest === client.name);
+
+  function handleDeleteClient() {
+    const currentClient = client;
+    if (!currentClient) return;
+
+    if (clientReservations.length > 0) {
+      notify('Cliente', 'Não é possível excluir cliente com reservas atribuídas.');
+      return;
+    }
+
+    confirmAction('Excluir cliente', `Excluir definitivamente ${currentClient.name}?`, async () => {
+      try {
+        await deleteClient(currentClient.id);
+        notify('Cliente excluído', `${currentClient.name} foi removido.`);
+        onBack();
+      } catch (requestError) {
+        notify('Cliente', requestError instanceof Error ? requestError.message : 'Não foi possível excluir o cliente.');
+      }
+    }, true);
+  }
 
   return (
     <ScreenScroll bottomInset={bottomInset}>
@@ -1011,6 +1265,14 @@ function ClientDetailScreen({ id, bottomInset, onBack }: { id: string; bottomIns
         <InfoRow label="E-mail" value={client.email} />
         <InfoBlock label="Estadias" value={String(client.totalStays)} />
         <InfoBlock label="Última visita" value={client.lastStay} />
+        <LiquidButton label="Editar cliente" onPress={() => onEdit(client.id)} style={styles.fullWidthButton} textStyle={styles.smallButtonText} />
+        <LiquidButton
+          disabled={clientReservations.length > 0}
+          label={clientReservations.length > 0 ? 'Cliente com reservas' : 'Excluir cliente'}
+          onPress={handleDeleteClient}
+          style={[styles.fullWidthButton, styles.dangerButton]}
+          textStyle={styles.smallButtonText}
+        />
       </DetailSection>
       <DetailSection title="Reservas vinculadas">
         {clientReservations.length ? (
@@ -1046,6 +1308,10 @@ function StayDetailScreen({ id, bottomInset, onBack }: { id: string; bottomInset
   const isDone = event.status === 'Concluido';
   const reservation = reservations.find((item) => item.guest === event.guest && item.room.includes(event.room));
   const client = clients.find((item) => item.name === event.guest);
+  const linkedCheckout =
+    event.type === 'Check-in' && event.status === 'Concluido'
+      ? checkIns.find((item) => item.type === 'Check-out' && item.reservationId && item.reservationId === event.reservationId)
+      : null;
 
   return (
     <ScreenScroll bottomInset={bottomInset}>
@@ -1066,8 +1332,35 @@ function StayDetailScreen({ id, bottomInset, onBack }: { id: string; bottomInset
           label={isDone ? 'Fluxo realizado' : event.type === 'Check-in' ? 'Fazer check-in agora' : 'Fazer check-out agora'}
           style={styles.fullWidthButton}
           textStyle={styles.smallButtonText}
-          onPress={() => performCheckInOrOut(event.id, 'Concluido')}
+          onPress={() =>
+            confirmAction(event.type, `Confirmar ${event.type.toLowerCase()} de ${event.guest}?`, async () => {
+              try {
+                await performCheckInOrOut(event.id, 'Concluido');
+                notify(event.type, `${event.type} realizado.`);
+              } catch (requestError) {
+                notify('Check-in/out', requestError instanceof Error ? requestError.message : 'Não foi possível concluir o fluxo.');
+              }
+            })
+          }
         />
+        {linkedCheckout ? (
+          <LiquidButton
+            disabled={linkedCheckout.status === 'Concluido'}
+            label={linkedCheckout.status === 'Concluido' ? 'Check-out realizado' : 'Fazer check-out agora'}
+            style={styles.fullWidthButton}
+            textStyle={styles.smallButtonText}
+            onPress={() =>
+              confirmAction('Check-out', `Confirmar check-out de ${linkedCheckout.guest}?`, async () => {
+                try {
+                  await performCheckInOrOut(linkedCheckout.id, 'Concluido');
+                  notify('Check-out', 'Check-out realizado.');
+                } catch (requestError) {
+                  notify('Check-out', requestError instanceof Error ? requestError.message : 'Não foi possível concluir o check-out.');
+                }
+              })
+            }
+          />
+        ) : null}
       </View>
       <DetailSection title="Operação">
         <InfoBlock label="ID" value={event.id} />
@@ -1082,6 +1375,24 @@ function StayDetailScreen({ id, bottomInset, onBack }: { id: string; bottomInset
         <InfoRow label="Período" value={reservation ? `${reservation.checkIn} até ${reservation.checkOut}` : '-'} />
         <InfoBlock label="Total" value={reservation?.amount || '-'} />
         <InfoBlock label="Status" value={reservation ? formatStatus(reservation.status) : '-'} />
+        {linkedCheckout ? (
+          <LiquidButton
+            disabled={linkedCheckout.status === 'Concluido'}
+            label={linkedCheckout.status === 'Concluido' ? 'Check-out realizado' : 'Fazer check-out'}
+            style={styles.fullWidthButton}
+            textStyle={styles.smallButtonText}
+            onPress={() =>
+              confirmAction('Check-out', `Confirmar check-out de ${linkedCheckout.guest}?`, async () => {
+                try {
+                  await performCheckInOrOut(linkedCheckout.id, 'Concluido');
+                  notify('Check-out', 'Check-out realizado.');
+                } catch (requestError) {
+                  notify('Check-out', requestError instanceof Error ? requestError.message : 'Não foi possível concluir o check-out.');
+                }
+              })
+            }
+          />
+        ) : null}
       </DetailSection>
       <DetailSection title="Hóspede">
         <InfoRow label="Cliente" value={client?.name || event.guest} />
@@ -1093,31 +1404,108 @@ function StayDetailScreen({ id, bottomInset, onBack }: { id: string; bottomInset
   );
 }
 
-function ClientModal({ visible, onClose }: { visible: boolean; onClose: () => void }) {
-  const { addClient } = useHotelData();
-  const [name, setName] = useState('');
-  const [email, setEmail] = useState('');
-  const [phone, setPhone] = useState('');
-  const [status, setStatus] = useState<ClientStatus>('Novo');
+function LogsScreen({ bottomInset, onBack }: { bottomInset: number; onBack: () => void }) {
+  const { getLogs } = useHotelData();
+  const { darkMode } = useVisual();
+  const [logs, setLogs] = useState<SystemLog[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  function save() {
+  useEffect(() => {
+    async function fetchLogs() {
+      try {
+        const data = await getLogs();
+        setLogs(data);
+      } catch (err) {
+        notify('Logs', 'Não foi possível carregar os logs.');
+      } finally {
+        setLoading(false);
+      }
+    }
+    fetchLogs();
+  }, [getLogs]);
+
+  return (
+    <ScreenScroll bottomInset={bottomInset}>
+      <DetailHeader title="Logs do Sistema" subtitle="Histórico de atividades recentes." onBack={onBack} />
+      {loading ? (
+        <View style={{ padding: 40, alignItems: 'center' }}>
+          <Text style={[styles.cardSubtitle, darkMode && styles.subtitleDark]}>Carregando logs...</Text>
+        </View>
+      ) : logs.length === 0 ? (
+        <EmptyState text="Nenhum log encontrado." />
+      ) : (
+        logs.map((log) => (
+          <View key={log.id} style={[styles.card, darkMode && styles.surfaceDark]}>
+            <View style={styles.cardTop}>
+              <View style={styles.avatar}>
+                <AppIcon name={{ ios: 'list.bullet.rectangle', android: 'list', web: 'list' }} size={24} />
+              </View>
+              <View style={styles.cardMain}>
+                <Text style={[styles.cardTitle, darkMode && styles.titleDark]}>
+                  {log.operacao} em {log.tabela}
+                </Text>
+                <Text style={[styles.cardSubtitle, darkMode && styles.subtitleDark]}>
+                  Usuário: {log.usuario_login} · Registro: {log.registro_id}
+                </Text>
+                <Text style={[styles.cardSubtitle, darkMode && styles.subtitleDark]}>{new Date(log.criado_em).toLocaleString('pt-BR')}</Text>
+              </View>
+            </View>
+            {log.dados_novos && log.dados_novos !== '{}' && (
+              <View style={{ marginTop: 12, padding: 12, backgroundColor: darkMode ? '#1A2E25' : '#f0f4f2', borderRadius: 8 }}>
+                <Text style={[styles.cardSubtitle, { fontWeight: '600', marginBottom: 4 }, darkMode && styles.subtitleDark]}>Dados:</Text>
+                <Text style={[styles.cardSubtitle, { fontSize: 12, fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace' }, darkMode && styles.subtitleDark]}>
+                  {typeof log.dados_novos === 'object' ? JSON.stringify(log.dados_novos, null, 2) : log.dados_novos}
+                </Text>
+              </View>
+            )}
+          </View>
+        ))
+      )}
+    </ScreenScroll>
+  );
+}
+
+function ClientModal({ visible, onClose, client }: { visible: boolean; onClose: () => void; client?: Client | null }) {
+  const { addClient, updateClient } = useHotelData();
+  const { darkMode } = useVisual();
+  const [name, setName] = useState(client?.name || '');
+  const [email, setEmail] = useState(client?.email || '');
+  const [phone, setPhone] = useState(client?.phone || '');
+  const [status, setStatus] = useState<ClientStatus>(client?.status || 'Novo');
+
+  useEffect(() => {
+    setName(client?.name || '');
+    setEmail(client?.email || '');
+    setPhone(client?.phone || '');
+    setStatus(client?.status || 'Novo');
+  }, [client, visible]);
+
+  async function save() {
     if (!name.trim()) {
       notify('Cliente', 'Informe o nome completo.');
       return;
     }
-    addClient({ name: name.trim(), email: email.trim() || '-', phone: phone.trim() || '-', status });
-    setName('');
-    setEmail('');
-    setPhone('');
-    setStatus('Novo');
-    onClose();
+    try {
+      if (client) {
+        await updateClient(client.id, { name: name.trim(), email: email.trim() || '-', phone: phone.trim() || '-', status });
+      } else {
+        await addClient({ name: name.trim(), email: email.trim() || '-', phone: phone.trim() || '-', status });
+      }
+      setName('');
+      setEmail('');
+      setPhone('');
+      setStatus('Novo');
+      onClose();
+    } catch (requestError) {
+      notify('Cliente', requestError instanceof Error ? requestError.message : 'Não foi possível salvar o cliente.');
+    }
   }
 
   return (
-    <FormModal visible={visible} title="Novo Cliente" onClose={onClose} onSubmit={save} submitLabel="Salvar Cliente">
-      <TextInput style={styles.input} value={name} onChangeText={setName} placeholder="Nome completo *" />
-      <TextInput style={styles.input} value={email} onChangeText={setEmail} placeholder="E-mail" keyboardType="email-address" autoCapitalize="none" />
-      <TextInput style={styles.input} value={phone} onChangeText={setPhone} placeholder="Telefone / WhatsApp" keyboardType="phone-pad" />
+    <FormModal visible={visible} title={client ? 'Editar Cliente' : 'Novo Cliente'} onClose={onClose} onSubmit={save} submitLabel="Salvar Cliente">
+      <TextInput style={[styles.input, darkMode && styles.surfaceDark, darkMode && styles.inputTextDark]} value={name} onChangeText={setName} placeholder="Nome completo *" placeholderTextColor={darkMode ? '#C1D0CA' : colors.muted} />
+      <TextInput style={[styles.input, darkMode && styles.surfaceDark, darkMode && styles.inputTextDark]} value={email} onChangeText={setEmail} placeholder="E-mail" placeholderTextColor={darkMode ? '#C1D0CA' : colors.muted} keyboardType="email-address" autoCapitalize="none" />
+      <TextInput style={[styles.input, darkMode && styles.surfaceDark, darkMode && styles.inputTextDark]} value={phone} onChangeText={setPhone} placeholder="Telefone / WhatsApp" placeholderTextColor={darkMode ? '#C1D0CA' : colors.muted} keyboardType="phone-pad" />
       <Text style={styles.fieldLabel}>Status do cliente</Text>
       <LiquidSegmentedControl
         value={status}
@@ -1132,14 +1520,93 @@ function ClientModal({ visible, onClose }: { visible: boolean; onClose: () => vo
   );
 }
 
-function ReservationModal({ visible, onClose, onCreated }: { visible: boolean; onClose: () => void; onCreated?: (guest: string) => void }) {
-  const { clients, addReservation, calculateReservationTotal } = useHotelData();
+function UserModal({
+  visible,
+  user,
+  onClose,
+  onSave,
+}: {
+  visible: boolean;
+  user?: UserAccount | null;
+  onClose: () => void;
+  onSave: (user: { name: string; login: string; role: UserRole; status: UserStatus; password?: string }, userId?: string) => Promise<void>;
+}) {
   const { darkMode } = useVisual();
-  const [guest, setGuest] = useState('');
-  const [checkIn, setCheckIn] = useState('');
-  const [checkOut, setCheckOut] = useState('');
-  const [roomType, setRoomType] = useState<RoomType>('Standard');
-  const [roomNumber, setRoomNumber] = useState('');
+  const [name, setName] = useState(user?.name || '');
+  const [login, setLogin] = useState(user?.login || '');
+  const [role, setRole] = useState<UserRole>(user?.role || 'Operacional');
+  const [status, setStatus] = useState<UserStatus>(user?.status || 'Ativo');
+  const [password, setPassword] = useState('');
+
+  useEffect(() => {
+    setName(user?.name || '');
+    setLogin(user?.login || '');
+    setRole(user?.role || 'Operacional');
+    setStatus(user?.status || 'Ativo');
+    setPassword('');
+  }, [user, visible]);
+
+  async function save() {
+    if (!name.trim() || !login.trim()) {
+      notify('Usuário', 'Informe nome e login.');
+      return;
+    }
+    if (!user && !password.trim()) {
+      notify('Usuário', 'Informe uma senha para o novo usuário.');
+      return;
+    }
+    try {
+      await onSave({ name: name.trim(), login: login.trim(), role, status, password: password.trim() || undefined }, user?.id);
+      onClose();
+    } catch (requestError) {
+      notify('Usuário', requestError instanceof Error ? requestError.message : 'Não foi possível salvar o usuário.');
+    }
+  }
+
+  return (
+    <FormModal visible={visible} title={user ? 'Editar Usuário' : 'Novo Usuário'} onClose={onClose} onSubmit={save} submitLabel="Salvar">
+      <TextInput style={[styles.input, darkMode && styles.surfaceDark, darkMode && styles.inputTextDark]} value={name} onChangeText={setName} placeholder="Nome completo *" placeholderTextColor={darkMode ? '#C1D0CA' : colors.muted} />
+      <TextInput style={[styles.input, darkMode && styles.surfaceDark, darkMode && styles.inputTextDark]} value={login} onChangeText={setLogin} placeholder="Login *" placeholderTextColor={darkMode ? '#C1D0CA' : colors.muted} autoCapitalize="none" />
+      <TextInput style={[styles.input, darkMode && styles.surfaceDark, darkMode && styles.inputTextDark]} value={password} onChangeText={setPassword} placeholder={user ? 'Nova senha (opcional)' : 'Senha *'} placeholderTextColor={darkMode ? '#C1D0CA' : colors.muted} secureTextEntry />
+      <Text style={styles.fieldLabel}>Perfil</Text>
+      <LiquidSegmentedControl
+        value={role}
+        onChange={setRole}
+        options={[
+          { label: 'Admin', value: 'Administrador' },
+          { label: 'Gerente', value: 'Gerente' },
+          { label: 'Operacao', value: 'Operacional' },
+        ]}
+      />
+      <Text style={styles.fieldLabel}>Status</Text>
+      <LiquidSegmentedControl
+        value={status}
+        onChange={setStatus}
+        options={[
+          { label: 'Ativo', value: 'Ativo' },
+          { label: 'Bloqueado', value: 'Bloqueado' },
+        ]}
+      />
+    </FormModal>
+  );
+}
+
+function ReservationModal({ visible, onClose, onCreated, reservation }: { visible: boolean; onClose: () => void; onCreated?: (guest: string) => void; reservation?: Reservation | null }) {
+  const { clients, addReservation, updateReservation, calculateReservationTotal } = useHotelData();
+  const { darkMode } = useVisual();
+  const [guest, setGuest] = useState(reservation?.guest || '');
+  const [checkIn, setCheckIn] = useState(reservation?.rawCheckIn || '');
+  const [checkOut, setCheckOut] = useState(reservation?.rawCheckOut || '');
+  const [roomType, setRoomType] = useState<RoomType>((reservation?.room.split(' - ')[1] as RoomType | undefined) || 'Standard');
+  const [roomNumber, setRoomNumber] = useState(reservation?.room.split(' - ')[0] || '');
+
+  useEffect(() => {
+    setGuest(reservation?.guest || '');
+    setCheckIn(reservation?.rawCheckIn || '');
+    setCheckOut(reservation?.rawCheckOut || '');
+    setRoomType((reservation?.room.split(' - ')[1] as RoomType | undefined) || 'Standard');
+    setRoomNumber(reservation?.room.split(' - ')[0] || '');
+  }, [reservation, visible]);
 
   const selectedClient = clients.find((client) => client.name === guest);
   const { days, total } = calculateReservationTotal(checkIn, checkOut, roomType);
@@ -1149,7 +1616,7 @@ function ReservationModal({ visible, onClose, onCreated }: { visible: boolean; o
     return clients.filter((client) => normalize(client.name).includes(term)).slice(0, 5);
   }, [clients, guest, selectedClient]);
 
-  function save() {
+  async function save() {
     if (!selectedClient) {
       notify('Reserva', 'Selecione um hóspede cadastrado.');
       return;
@@ -1162,18 +1629,26 @@ function ReservationModal({ visible, onClose, onCreated }: { visible: boolean; o
       notify('Reserva', 'Informe o número do quarto.');
       return;
     }
-    addReservation({ guest: selectedClient.name, roomNumber: roomNumber.trim(), roomType, checkIn, checkOut });
-    onCreated?.(selectedClient.name);
-    setGuest('');
-    setCheckIn('');
-    setCheckOut('');
-    setRoomType('Standard');
-    setRoomNumber('');
-    onClose();
+    try {
+      if (reservation) {
+        await updateReservation(reservation.id, { guest: selectedClient.name, roomNumber: roomNumber.trim(), roomType, checkIn, checkOut });
+      } else {
+        await addReservation({ guest: selectedClient.name, roomNumber: roomNumber.trim(), roomType, checkIn, checkOut });
+        onCreated?.(selectedClient.name);
+      }
+      setGuest('');
+      setCheckIn('');
+      setCheckOut('');
+      setRoomType('Standard');
+      setRoomNumber('');
+      onClose();
+    } catch (requestError) {
+      notify('Reserva', requestError instanceof Error ? requestError.message : 'Não foi possível salvar a reserva.');
+    }
   }
 
   return (
-    <FormModal visible={visible} title="Nova Reserva" onClose={onClose} onSubmit={save} submitLabel="Confirmar Reserva">
+    <FormModal visible={visible} title={reservation ? 'Editar Reserva' : 'Nova Reserva'} onClose={onClose} onSubmit={save} submitLabel={reservation ? 'Salvar Reserva' : 'Confirmar Reserva'}>
       <TextInput style={[styles.input, darkMode && styles.surfaceDark, darkMode && styles.inputTextDark]} value={guest} onChangeText={setGuest} placeholder="Buscar cliente cadastrado *" placeholderTextColor={darkMode ? '#A7B8AF' : '#52645B'} />
       <View style={styles.suggestionList}>
         {filteredClients.map((client) => (
@@ -1183,8 +1658,8 @@ function ReservationModal({ visible, onClose, onCreated }: { visible: boolean; o
           </Pressable>
         ))}
       </View>
-      <TextInput style={[styles.input, darkMode && styles.surfaceDark, darkMode && styles.inputTextDark]} value={checkIn} onChangeText={setCheckIn} placeholder="Check-in AAAA-MM-DD *" placeholderTextColor={darkMode ? '#A7B8AF' : '#52645B'} keyboardType="numbers-and-punctuation" />
-      <TextInput style={[styles.input, darkMode && styles.surfaceDark, darkMode && styles.inputTextDark]} value={checkOut} onChangeText={setCheckOut} placeholder="Check-out AAAA-MM-DD *" placeholderTextColor={darkMode ? '#A7B8AF' : '#52645B'} keyboardType="numbers-and-punctuation" />
+      <DatePickerField label="Check-in" value={checkIn} onChange={setCheckIn} />
+      <DatePickerField label="Check-out" value={checkOut} onChange={setCheckOut} />
       <Text style={styles.fieldLabel}>Tipo de quarto</Text>
       <View style={styles.roomTypeList}>
         {roomTypes.map((option) => (
@@ -1220,14 +1695,16 @@ function FormModal({
   children: ReactNode;
   submitLabel: string;
   onClose: () => void;
-  onSubmit: () => void;
+  onSubmit: () => void | Promise<void>;
 }) {
+  const { darkMode } = useVisual();
+
   return (
     <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
       <KeyboardAvoidingView behavior={Platform.OS === 'ios' ? 'padding' : undefined} style={styles.modalOverlay}>
-        <View style={styles.modalContent}>
+        <View style={[styles.modalContent, darkMode && styles.surfaceDark]}>
           <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle}>{title}</Text>
+            <Text style={[styles.modalTitle, darkMode && styles.titleDark]}>{title}</Text>
             <Pressable style={styles.closeButton} onPress={onClose}>
               <Text style={styles.closeButtonText}>×</Text>
             </Pressable>
@@ -1246,6 +1723,7 @@ function FormModal({
 }
 
 function LoginScreen({ onLogin }: { onLogin: () => void }) {
+  const { login, isLoading } = useHotelData();
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
   const [loginError, setLoginError] = useState('');
@@ -1269,13 +1747,19 @@ function LoginScreen({ onLogin }: { onLogin: () => void }) {
     ]).start();
   }, [opacity, scale]);
 
-  function submit() {
-    if (username.trim() === 'admin' && password === 'admin') {
-      setLoginError('');
-      onLogin();
+  async function submit() {
+    if (!username.trim() || !password) {
+      setLoginError('Informe usuário e senha.');
       return;
     }
-    setLoginError('Usuário ou senha inválidos.');
+
+    try {
+      await login(username.trim(), password);
+      setLoginError('');
+      onLogin();
+    } catch (requestError) {
+      setLoginError(requestError instanceof Error ? requestError.message : 'Usuário ou senha inválidos.');
+    }
   }
 
   return (
@@ -1315,7 +1799,7 @@ function LoginScreen({ onLogin }: { onLogin: () => void }) {
               />
             </View>
             {loginError ? <Text style={styles.loginError}>{loginError}</Text> : null}
-            <LiquidButton label="Entrar" onPress={submit} style={styles.loginButton} textStyle={styles.loginButtonText} tintColor="rgba(30, 101, 77, 0.32)" />
+            <LiquidButton label={isLoading ? 'Entrando...' : 'Entrar'} disabled={isLoading} onPress={submit} style={styles.loginButton} textStyle={styles.loginButtonText} tintColor="rgba(30, 101, 77, 0.32)" />
           </View>
         </Animated.View>
       </KeyboardAvoidingView>
@@ -1402,10 +1886,13 @@ function NativeTabsShell({
   reservationNotifications,
   dailyCheckinNotifications,
   notifications,
+  users,
   bottomInset,
   openReservation,
   openClient,
   openDetail,
+  openUser,
+  editUser,
   setDarkMode,
   setCompactMenu,
   setReservationNotifications,
@@ -1420,10 +1907,13 @@ function NativeTabsShell({
   reservationNotifications: boolean;
   dailyCheckinNotifications: boolean;
   notifications: AppNotification[];
+  users: UserAccount[];
   bottomInset: number;
   openReservation: () => void;
   openClient: () => void;
   openDetail: (target: NonNullable<DetailTarget>) => void;
+  openUser: () => void;
+  editUser: (userId: string) => void;
   setDarkMode: (value: boolean) => void;
   setCompactMenu: (value: boolean) => void;
   setReservationNotifications: (value: boolean) => void;
@@ -1501,7 +1991,10 @@ function NativeTabsShell({
             reservationNotifications={reservationNotifications}
             dailyCheckinNotifications={dailyCheckinNotifications}
             notifications={notifications}
+            users={users}
             onEditProfile={() => openDetail({ type: 'profile' })}
+            onCreateUser={openUser}
+            onEditUser={editUser}
             onToggleDarkMode={setDarkMode}
             onToggleCompactMenu={setCompactMenu}
             onToggleReservationNotifications={setReservationNotifications}
@@ -1514,6 +2007,7 @@ function NativeTabsShell({
             onAddNotification={addNotification}
             onMarkNotificationsRead={markNotificationsRead}
             onClearNotifications={clearNotifications}
+            onShowLogs={() => openDetail({ type: 'logs' })}
           />
         )}
       </NativeTab.Screen>
@@ -1522,11 +2016,16 @@ function NativeTabsShell({
 }
 
 export default function HomeScreen() {
+  const { clients, reservations, users, addUser, updateUser } = useHotelData();
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [activeTab, setActiveTab] = useState<TabKey>('dashboard');
   const [detailTarget, setDetailTarget] = useState<DetailTarget>(null);
   const [reservationModalOpen, setReservationModalOpen] = useState(false);
+  const [editingReservationId, setEditingReservationId] = useState<string | null>(null);
   const [clientModalOpen, setClientModalOpen] = useState(false);
+  const [editingClientId, setEditingClientId] = useState<string | null>(null);
+  const [userModalOpen, setUserModalOpen] = useState(false);
+  const [editingUserId, setEditingUserId] = useState<string | null>(null);
   const [profile, setProfile] = useState<ProfileData>({
     name: 'Miguel Balbo',
     role: 'Gerente Geral',
@@ -1588,21 +2087,62 @@ export default function HomeScreen() {
   }
 
   function openReservationModal() {
+    setEditingReservationId(null);
     setReservationModalOpen(true);
+  }
+
+  function openReservationEdit(reservationId: string) {
+    setEditingReservationId(reservationId);
+    setReservationModalOpen(true);
+  }
+
+  function openClientCreate() {
+    setEditingClientId(null);
+    setClientModalOpen(true);
+  }
+
+  function openClientEdit(clientId: string) {
+    setEditingClientId(clientId);
+    setClientModalOpen(true);
+  }
+
+  function openUserCreate() {
+    setEditingUserId(null);
+    setUserModalOpen(true);
+  }
+
+  function openUserEdit(userId: string) {
+    setEditingUserId(userId);
+    setUserModalOpen(true);
+  }
+
+  async function saveUser(user: { name: string; login: string; role: UserRole; status: UserStatus; password?: string }, userId?: string) {
+    if (userId) {
+      await updateUser(userId, user);
+      notify('Usuário', 'Usuário atualizado na API.');
+      return;
+    }
+    await addUser(user);
+    notify('Usuário', 'Usuário criado na API.');
   }
 
   if (!isAuthenticated) {
     return <LoginScreen onLogin={() => setIsAuthenticated(true)} />;
   }
 
+  const editingReservation = editingReservationId ? reservations.find((reservation) => reservation.id === editingReservationId) : null;
+  const editingClient = editingClientId ? clients.find((client) => client.id === editingClientId) : null;
+  const editingUser = editingUserId ? users.find((user) => user.id === editingUserId) : null;
+
   return (
     <VisualContext.Provider value={{ darkMode }}>
     <SafeAreaView style={[styles.root, darkMode && styles.rootDark]} edges={['top', 'left', 'right']}>
       <View style={[styles.appBody, darkMode && styles.appBodyDark]} {...backSwipeResponder.panHandlers}>
-        {detailTarget?.type === 'reservation' ? <ReservationDetailScreen id={detailTarget.id} bottomInset={contentBottomInset} onBack={() => setDetailTarget(null)} /> : null}
-        {detailTarget?.type === 'client' ? <ClientDetailScreen id={detailTarget.id} bottomInset={contentBottomInset} onBack={() => setDetailTarget(null)} /> : null}
+        {detailTarget?.type === 'reservation' ? <ReservationDetailScreen id={detailTarget.id} bottomInset={contentBottomInset} onBack={() => setDetailTarget(null)} onEdit={openReservationEdit} /> : null}
+        {detailTarget?.type === 'client' ? <ClientDetailScreen id={detailTarget.id} bottomInset={contentBottomInset} onBack={() => setDetailTarget(null)} onEdit={openClientEdit} /> : null}
         {detailTarget?.type === 'stay' ? <StayDetailScreen id={detailTarget.id} bottomInset={contentBottomInset} onBack={() => setDetailTarget(null)} /> : null}
         {detailTarget?.type === 'profile' ? <ProfileEditScreen profile={profile} bottomInset={contentBottomInset} onSave={setProfile} onBack={() => setDetailTarget(null)} /> : null}
+        {detailTarget?.type === 'logs' ? <LogsScreen bottomInset={contentBottomInset} onBack={() => setDetailTarget(null)} /> : null}
         {!detailTarget && useNativeTabs ? (
           <NativeTabsShell
             profile={profile}
@@ -1611,10 +2151,13 @@ export default function HomeScreen() {
             reservationNotifications={reservationNotifications}
             dailyCheckinNotifications={dailyCheckinNotifications}
             notifications={notifications}
+            users={users}
             bottomInset={contentBottomInset}
             openReservation={openReservationModal}
-            openClient={() => setClientModalOpen(true)}
+            openClient={openClientCreate}
             openDetail={setDetailTarget}
+            openUser={openUserCreate}
+            editUser={openUserEdit}
             setDarkMode={setDarkMode}
             setCompactMenu={setCompactMenu}
             setReservationNotifications={setReservationNotifications}
@@ -1631,7 +2174,7 @@ export default function HomeScreen() {
           <ReservationsScreen openReservation={openReservationModal} openDetail={setDetailTarget} bottomInset={contentBottomInset} />
         ) : null}
         {!detailTarget && !useNativeTabs && activeTab === 'checkin' ? <CheckInScreen openDetail={setDetailTarget} bottomInset={contentBottomInset} /> : null}
-        {!detailTarget && !useNativeTabs && activeTab === 'clientes' ? <ClientsScreen openClient={() => setClientModalOpen(true)} openDetail={setDetailTarget} bottomInset={contentBottomInset} /> : null}
+        {!detailTarget && !useNativeTabs && activeTab === 'clientes' ? <ClientsScreen openClient={openClientCreate} openDetail={setDetailTarget} bottomInset={contentBottomInset} /> : null}
         {!detailTarget && !useNativeTabs && activeTab === 'config' ? (
           <ConfigScreen
             bottomInset={contentBottomInset}
@@ -1641,7 +2184,10 @@ export default function HomeScreen() {
             reservationNotifications={reservationNotifications}
             dailyCheckinNotifications={dailyCheckinNotifications}
             notifications={notifications}
+            users={users}
             onEditProfile={() => setDetailTarget({ type: 'profile' })}
+            onCreateUser={openUserCreate}
+            onEditUser={openUserEdit}
             onToggleDarkMode={setDarkMode}
             onToggleCompactMenu={setCompactMenu}
             onToggleReservationNotifications={setReservationNotifications}
@@ -1654,37 +2200,58 @@ export default function HomeScreen() {
             onAddNotification={addNotification}
             onMarkNotificationsRead={() => setNotifications((current) => current.map((item) => ({ ...item, read: true })))}
             onClearNotifications={() => setNotifications([])}
+            onShowLogs={() => setDetailTarget({ type: 'logs' })}
           />
         ) : null}
       </View>
       {!useNativeTabs ? <BottomNav activeTab={activeTab} detailTarget={detailTarget} compactMenu={compactMenu} darkMode={darkMode} navBottom={navBottom} onTabPress={goToTab} /> : null}
       <ReservationModal
         visible={reservationModalOpen}
-        onClose={() => setReservationModalOpen(false)}
+        reservation={editingReservation}
+        onClose={() => {
+          setReservationModalOpen(false);
+          setEditingReservationId(null);
+        }}
         onCreated={(guest) => {
           if (reservationNotifications) {
             addNotification({ type: 'reserva', title: 'Reserva confirmada', message: `Nova reserva registrada para ${guest}.` });
           }
         }}
       />
-      <ClientModal visible={clientModalOpen} onClose={() => setClientModalOpen(false)} />
+      <ClientModal
+        visible={clientModalOpen}
+        client={editingClient}
+        onClose={() => {
+          setClientModalOpen(false);
+          setEditingClientId(null);
+        }}
+      />
+      <UserModal
+        visible={userModalOpen}
+        user={editingUser}
+        onClose={() => {
+          setUserModalOpen(false);
+          setEditingUserId(null);
+        }}
+        onSave={saveUser}
+      />
     </SafeAreaView>
     </VisualContext.Provider>
   );
 }
 
 const colors = {
-  background: '#F5F7F4',
+  background: '#F7FAF8',
   surface: '#FFFFFF',
-  card: '#ECF8EF',
-  primary: '#7ED99B',
-  secondary: '#1E654D',
-  blue: '#DDEBFF',
-  text: '#17382D',
-  muted: '#738077',
-  border: '#E5EDE6',
-  danger: '#D94D4D',
-  warning: '#B98200',
+  card: '#E7F6EC',
+  primary: '#64C985',
+  secondary: '#124C3A',
+  blue: '#D8E8FF',
+  text: '#102D24',
+  muted: '#4F6358',
+  border: '#D8E5DC',
+  danger: '#B42318',
+  warning: '#8A5A00',
 };
 
 const styles = StyleSheet.create({
@@ -1791,32 +2358,32 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
   },
   rootDark: {
-    backgroundColor: '#07110D',
+    backgroundColor: '#0B1110',
   },
   darkScreen: {
-    backgroundColor: '#07110D',
+    backgroundColor: '#0B1110',
   },
   surfaceDark: {
-    backgroundColor: '#10231B',
-    borderColor: '#234237',
+    backgroundColor: '#17211F',
+    borderColor: '#334541',
   },
   titleDark: {
-    color: '#EEF8F2',
+    color: '#F4FBF8',
   },
   subtitleDark: {
-    color: '#A7B8AF',
+    color: '#C1D0CA',
   },
   bodyTextDark: {
-    color: '#D6E5DE',
+    color: '#E2EEE9',
   },
   inputTextDark: {
-    color: '#DDEBE4',
+    color: '#F0F8F5',
   },
   appBody: {
     flex: 1,
   },
   appBodyDark: {
-    backgroundColor: '#07110D',
+    backgroundColor: '#0B1110',
   },
   screenContent: {
     padding: 20,
@@ -1891,15 +2458,16 @@ const styles = StyleSheet.create({
     minHeight: 46,
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: '#9BAEA4',
+    backgroundColor: colors.surface,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: 18,
     flex: 1,
   },
   secondaryButtonText: {
-    color: colors.muted,
-    fontWeight: '500',
+    color: colors.secondary,
+    fontWeight: '700',
   },
   grid: {
     flexDirection: 'row',
@@ -1942,7 +2510,7 @@ const styles = StyleSheet.create({
   statLabel: {
     color: colors.muted,
     fontSize: 13,
-    fontWeight: '400',
+    fontWeight: '600',
     marginTop: 4,
   },
   section: {
@@ -2041,6 +2609,7 @@ const styles = StyleSheet.create({
     color: colors.muted,
     fontSize: 12,
     lineHeight: 18,
+    fontWeight: '500',
     flexShrink: 1,
   },
   twoColumn: {
@@ -2061,7 +2630,7 @@ const styles = StyleSheet.create({
   infoLabel: {
     color: colors.muted,
     fontSize: 10,
-    fontWeight: '600',
+    fontWeight: '700',
     textTransform: 'uppercase',
   },
   infoValue: {
@@ -2081,7 +2650,7 @@ const styles = StyleSheet.create({
   infoRowValue: {
     color: colors.text,
     fontSize: 14,
-    fontWeight: '400',
+    fontWeight: '500',
     lineHeight: 21,
     marginTop: 4,
   },
@@ -2144,6 +2713,32 @@ const styles = StyleSheet.create({
     justifyContent: 'flex-end',
     gap: 12,
   },
+  actionWarningText: {
+    width: '100%',
+    color: colors.muted,
+    fontSize: 13,
+    lineHeight: 19,
+  },
+  reservationActionRow: {
+    width: '100%',
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 10,
+  },
+  reservationActionButton: {
+    minHeight: 42,
+    borderRadius: 999,
+    paddingHorizontal: 14,
+    alignItems: 'center',
+    justifyContent: 'center',
+    flexGrow: 1,
+  },
+  warningButton: {
+    backgroundColor: colors.warning,
+  },
+  dangerButton: {
+    backgroundColor: colors.danger,
+  },
   smallButton: {
     minHeight: 38,
     borderRadius: 999,
@@ -2153,7 +2748,9 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   disabledButton: {
-    backgroundColor: colors.primary,
+    backgroundColor: '#6B7B74',
+    borderColor: '#6B7B74',
+    opacity: 0.78,
   },
   smallButtonText: {
     color: '#FFFFFF',
@@ -2218,8 +2815,8 @@ const styles = StyleSheet.create({
     overflow: 'hidden',
   },
   segmentText: {
-    color: colors.muted,
-    fontWeight: '500',
+    color: colors.secondary,
+    fontWeight: '700',
     fontSize: 13,
   },
   segmentTextGlass: {
@@ -2234,6 +2831,27 @@ const styles = StyleSheet.create({
     borderTopColor: colors.border,
     paddingTop: 12,
   },
+  managementRow: {
+    minHeight: 58,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 8,
+    backgroundColor: colors.background,
+    padding: 12,
+  },
+  inlineActionButton: {
+    minHeight: 36,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.surface,
+    paddingHorizontal: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   input: {
     minHeight: 48,
     borderRadius: 999,
@@ -2243,6 +2861,19 @@ const styles = StyleSheet.create({
     color: colors.text,
     paddingHorizontal: 14,
     fontSize: 15,
+  },
+  dateField: {
+    width: '100%',
+  },
+  dateButton: {
+    alignItems: 'flex-start',
+    justifyContent: 'center',
+    gap: 2,
+  },
+  dateButtonText: {
+    color: colors.text,
+    fontSize: 15,
+    fontWeight: '500',
   },
   toggleRow: {
     flexDirection: 'row',
@@ -2276,12 +2907,12 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   linkText: {
-    color: colors.secondary,
-    fontWeight: '600',
+    color: '#0B5F45',
+    fontWeight: '800',
   },
   dangerLink: {
     color: colors.danger,
-    fontWeight: '600',
+    fontWeight: '800',
   },
   modalOverlay: {
     flex: 1,
@@ -2332,6 +2963,121 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: colors.border,
   },
+  confirmOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(23, 56, 45, 0.46)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    padding: 22,
+  },
+  confirmDialog: {
+    width: '100%',
+    maxWidth: 420,
+    borderRadius: 8,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: 18,
+    gap: 14,
+  },
+  calendarDialog: {
+    width: '100%',
+    maxWidth: 380,
+    borderRadius: 8,
+    backgroundColor: colors.surface,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: 16,
+    gap: 14,
+  },
+  calendarHeader: {
+    minHeight: 40,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 10,
+  },
+  calendarNavButton: {
+    width: 38,
+    height: 38,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  calendarTitle: {
+    flex: 1,
+    textAlign: 'center',
+    color: colors.secondary,
+    fontSize: 17,
+    fontWeight: '600',
+    textTransform: 'capitalize',
+  },
+  weekdayRow: {
+    flexDirection: 'row',
+  },
+  weekdayText: {
+    width: `${100 / 7}%`,
+    textAlign: 'center',
+    color: colors.muted,
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  calendarGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+  },
+  calendarDay: {
+    width: `${100 / 7}%`,
+    aspectRatio: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderRadius: 8,
+  },
+  calendarDayActive: {
+    backgroundColor: colors.secondary,
+  },
+  calendarDayText: {
+    color: colors.text,
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  calendarDayTextActive: {
+    color: '#FFFFFF',
+  },
+  confirmTitle: {
+    color: colors.secondary,
+    fontSize: 20,
+    lineHeight: 26,
+    fontWeight: '600',
+  },
+  confirmMessage: {
+    color: colors.text,
+    fontSize: 14,
+    lineHeight: 21,
+  },
+  confirmActions: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  confirmCancelButton: {
+    flex: 1,
+    minHeight: 44,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  confirmDeleteButton: {
+    flex: 1,
+    minHeight: 44,
+    borderRadius: 999,
+    backgroundColor: colors.danger,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   fieldLabel: {
     color: colors.muted,
     fontSize: 12,
@@ -2346,7 +3092,7 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     borderRadius: 8,
     padding: 12,
-    backgroundColor: colors.background,
+    backgroundColor: colors.surface,
   },
   suggestionActive: {
     borderColor: colors.secondary,
@@ -2379,7 +3125,7 @@ const styles = StyleSheet.create({
   },
   summary: {
     borderRadius: 8,
-    backgroundColor: colors.card,
+    backgroundColor: '#E5F4EA',
     borderWidth: 1,
     borderColor: colors.primary,
     padding: 14,
@@ -2436,8 +3182,8 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary,
   },
   tabBarDark: {
-    backgroundColor: '#17231F',
-    borderColor: '#2E4038',
+    backgroundColor: '#17211F',
+    borderColor: '#40524E',
   },
   tabBarCompact: {
     minHeight: 54,
@@ -2514,11 +3260,11 @@ const styles = StyleSheet.create({
     minHeight: 40,
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: '#9BAEA4',
     paddingHorizontal: 12,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: colors.background,
+    backgroundColor: colors.surface,
   },
   secondaryActionText: {
     color: colors.secondary,
@@ -2537,8 +3283,8 @@ const styles = StyleSheet.create({
     gap: 6,
   },
   notificationItemDark: {
-    borderColor: '#2E4038',
-    backgroundColor: '#101815',
+    borderColor: '#40524E',
+    backgroundColor: '#17211F',
   },
   notificationUnread: {
     borderColor: colors.primary,
