@@ -1,8 +1,8 @@
-import { Cliente, Reserva } from '../models/index.js';
-import { callProcedure, firstProcedureRow } from '../config/dbProcedures.js';
+import { CheckIn, Cliente, Reserva } from '../models/index.js';
+import { callProcedure, databaseErrorStatus, firstProcedureRow } from '../config/dbProcedures.js';
 
 const handleError = (res, error) => {
-  const status = error.name === 'SequelizeValidationError' ? 400 : 500;
+  const status = databaseErrorStatus(error) || (error.name === 'SequelizeValidationError' ? 400 : 500);
   return res.status(status).json({ error: error.message });
 };
 
@@ -45,7 +45,8 @@ export const criarReserva = async (req, res) => {
           checkOut,
           status: req.body.status || null,
           valorTotal: req.body.valorTotal ?? null,
-        }
+        },
+        req.user
       )
     );
     return res.status(201).json(reserva);
@@ -60,7 +61,7 @@ export const atualizarReserva = async (req, res) => {
       await callProcedure('CALL sp_atualizar_reserva(:id, :payload)', {
         id: req.params.id,
         payload: JSON.stringify(req.body),
-      })
+      }, req.user)
     );
     if (!reserva) return res.status(404).json({ error: 'Reserva não encontrada.' });
     return res.json(reserva);
@@ -71,7 +72,15 @@ export const atualizarReserva = async (req, res) => {
 
 export const cancelarReserva = async (req, res) => {
   try {
-    const reserva = firstProcedureRow(await callProcedure('CALL sp_cancelar_reserva(:id)', { id: req.params.id }));
+    const reservaAtual = await Reserva.findByPk(req.params.id);
+    if (!reservaAtual) return res.status(404).json({ error: 'Reserva não encontrada.' });
+
+    const checkInEfetivado = reservaAtual.status === 'Check-in' || reservaAtual.status === 'Check-out' || Boolean(await CheckIn.count({ where: { reservaId: req.params.id, status: 'Concluido' } }));
+    if (checkInEfetivado) {
+      return res.status(409).json({ error: 'Não é possível cancelar reserva com check-in efetivado.' });
+    }
+
+    const reserva = firstProcedureRow(await callProcedure('CALL sp_cancelar_reserva(:id)', { id: req.params.id }, req.user));
     if (!reserva) return res.status(404).json({ error: 'Reserva não encontrada.' });
     return res.json(reserva);
   } catch (error) {
@@ -81,7 +90,7 @@ export const cancelarReserva = async (req, res) => {
 
 export const removerReserva = async (req, res) => {
   try {
-    const result = firstProcedureRow(await callProcedure('CALL sp_remover_reserva(:id)', { id: req.params.id }));
+    const result = firstProcedureRow(await callProcedure('CALL sp_remover_reserva(:id)', { id: req.params.id }, req.user));
     if (!result?.affectedRows) return res.status(404).json({ error: 'Reserva não encontrada.' });
     return res.status(204).send();
   } catch (error) {

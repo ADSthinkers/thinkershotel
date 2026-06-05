@@ -1,8 +1,8 @@
-import { Cliente } from '../models/index.js';
-import { callProcedure, firstProcedureRow } from '../config/dbProcedures.js';
+import { Cliente, Reserva } from '../models/index.js';
+import { callProcedure, databaseErrorStatus, firstProcedureRow } from '../config/dbProcedures.js';
 
 const handleError = (res, error) => {
-  const status = error.name === 'SequelizeValidationError' || error.name === 'SequelizeUniqueConstraintError' ? 400 : 500;
+  const status = databaseErrorStatus(error) || (error.name === 'SequelizeValidationError' || error.name === 'SequelizeUniqueConstraintError' ? 400 : 500);
   return res.status(status).json({ error: error.message });
 };
 
@@ -42,7 +42,8 @@ export const criarCliente = async (req, res) => {
           status: req.body.status || null,
           totalHospedagens: req.body.totalHospedagens ?? null,
           ultimaHospedagem: req.body.ultimaHospedagem || null,
-        }
+        },
+        req.user
       )
     );
     return res.status(201).json(cliente);
@@ -57,7 +58,7 @@ export const atualizarCliente = async (req, res) => {
       await callProcedure('CALL sp_atualizar_cliente(:id, :payload)', {
         id: req.params.id,
         payload: JSON.stringify(req.body),
-      })
+      }, req.user)
     );
     if (!cliente) return res.status(404).json({ error: 'Cliente não encontrado.' });
     return res.json(cliente);
@@ -68,7 +69,12 @@ export const atualizarCliente = async (req, res) => {
 
 export const removerCliente = async (req, res) => {
   try {
-    const result = firstProcedureRow(await callProcedure('CALL sp_remover_cliente(:id)', { id: req.params.id }));
+    const reservasAtribuidas = await Reserva.count({ where: { clienteId: req.params.id } });
+    if (reservasAtribuidas > 0) {
+      return res.status(409).json({ error: 'Não é possível excluir cliente com reservas atribuídas.' });
+    }
+
+    const result = firstProcedureRow(await callProcedure('CALL sp_remover_cliente(:id)', { id: req.params.id }, req.user));
     if (!result?.affectedRows) return res.status(404).json({ error: 'Cliente não encontrado.' });
     return res.status(204).send();
   } catch (error) {

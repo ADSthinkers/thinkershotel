@@ -2,20 +2,20 @@ import Cliente from './Cliente.js';
 import Reserva from './Reserva.js';
 import CheckIn from './CheckIn.js';
 import CheckOut from './CheckOut.js';
+import UsuarioSistema from './UsuarioSistema.js';
 
-Cliente.hasMany(Reserva, { foreignKey: 'clienteId', as: 'reservas' });
-Reserva.belongsTo(Cliente, { foreignKey: 'clienteId', as: 'cliente' });
+const restrictRelation = {
+  onDelete: 'RESTRICT',
+  onUpdate: 'CASCADE',
+};
 
-Reserva.hasMany(CheckIn, { foreignKey: 'reservaId', as: 'checkIns' });
-CheckIn.belongsTo(Reserva, { foreignKey: 'reservaId', as: 'reserva' });
+Cliente.hasMany(Reserva, { foreignKey: 'clienteId', as: 'reservas', ...restrictRelation });
+Reserva.belongsTo(Cliente, { foreignKey: 'clienteId', as: 'cliente', ...restrictRelation });
 
-Reserva.hasMany(CheckOut, { foreignKey: 'reservaId', as: 'checkOuts' });
-CheckOut.belongsTo(Reserva, { foreignKey: 'reservaId', as: 'reserva' });
+Reserva.hasMany(CheckIn, { foreignKey: 'reservaId', as: 'checkIns', ...restrictRelation });
+CheckIn.belongsTo(Reserva, { foreignKey: 'reservaId', as: 'reserva', ...restrictRelation });
 
-Cliente.hasMany(CheckIn, { foreignKey: 'clienteId', as: 'checkIns' });
-CheckIn.belongsTo(Cliente, { foreignKey: 'clienteId', as: 'cliente' });
+Reserva.hasMany(CheckOut, { foreignKey: 'reservaId', as: 'checkOuts', ...restrictRelation });
+CheckOut.belongsTo(Reserva, { foreignKey: 'reservaId', as: 'reserva', ...restrictRelation });
 
-Cliente.hasMany(CheckOut, { foreignKey: 'clienteId', as: 'checkOuts' });
-CheckOut.belongsTo(Cliente, { foreignKey: 'clienteId', as: 'cliente' });
-
-export { Cliente, Reserva, CheckIn, CheckOut };
+export { Cliente, Reserva, CheckIn, CheckOut, UsuarioSistema };

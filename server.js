@@ -8,8 +8,9 @@ import AuthRoutes from './routes/AuthRoutes.js';
 import CheckInRoutes from './routes/CheckInRoutes.js';
 import CheckOutRoutes from './routes/CheckOutRoutes.js';
 import ClienteRoutes from './routes/ClienteRoutes.js';
+import LogRoutes from './routes/LogRoutes.js';
 import ReservaRoutes from './routes/ReservaRoutes.js';
-import RelatorioRoutes from './routes/RelatorioRoutes.js';
+import UsuarioRoutes from './routes/UsuarioRoutes.js';
 
 const app = express();
 const PORT = process.env.PORT || 5001;
@@ -47,7 +48,8 @@ function logRegisteredRoutes() {
   console.log('   • /api/reservas');
   console.log('   • /api/check-ins');
   console.log('   • /api/check-outs');
-  console.log('   • GET  /api/relatorios/bd');
+  console.log('   • /api/usuarios');
+  console.log('   • GET  /api/logs');
 }
 
 app.use(cors());
@@ -63,7 +65,8 @@ app.use('/api/clientes', ClienteRoutes);
 app.use('/api/reservas', ReservaRoutes);
 app.use('/api/check-ins', CheckInRoutes);
 app.use('/api/check-outs', CheckOutRoutes);
-app.use('/api/relatorios', RelatorioRoutes);
+app.use('/api/usuarios', UsuarioRoutes);
+app.use('/api/logs', LogRoutes);
 
 app.use((req, res) => {
   console.warn(`⚠️  Rota não encontrada: ${req.method} ${req.originalUrl}`);
@@ -77,5 +80,5 @@ logRegisteredRoutes();
 app.listen(PORT, () => {
   console.log(`✅ ThiHotel API rodando em ${API_BASE_URL}`);
   console.log(`🔎 Healthcheck: ${API_BASE_URL}/api/health`);
-  console.log(`📖 Relatório do BD: ${API_BASE_URL}/api/relatorios/bd`);
+  console.log(`🧾 Logs de atividades: ${API_BASE_URL}/api/logs`);
 });

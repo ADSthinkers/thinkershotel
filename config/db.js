@@ -48,8 +48,10 @@ const connectDB = async () => {
     console.log('📊 Objetos adicionais do banco configurados:');
     console.log(`   • Tabela de usuários: ${setupStatus.systemUsersTable}`);
     console.log(`   • Usuário padrão: admin/admin`);
-    console.log(`   • Tabela de relatório: ${setupStatus.reportTable}`);
-    console.log(`   • Triggers de relatório: ${setupStatus.reportTriggers}`);
+    console.log(`   • Tabela de logs: ${setupStatus.activityLogTable}`);
+    console.log(`   • Triggers de logs: ${setupStatus.activityLogTriggers}`);
+    console.log(`   • Relatório legado removido: ${setupStatus.legacyReportTableRemoved ? 'sim' : 'não'}`);
+    console.log(`   • Relacionamentos/FKs: ${setupStatus.relationships}`);
     console.log(`   • Stored procedures: ${setupStatus.storedProcedures}`);
 
   } catch (error) {

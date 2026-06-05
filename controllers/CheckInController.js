@@ -1,14 +1,13 @@
-import { CheckIn, Cliente, Reserva } from '../models/index.js';
-import { callProcedure, firstProcedureRow } from '../config/dbProcedures.js';
+import { CheckIn, Reserva } from '../models/index.js';
+import { callProcedure, databaseErrorStatus, firstProcedureRow } from '../config/dbProcedures.js';
 
 const handleError = (res, error) => {
-  const status = error.name === 'SequelizeValidationError' ? 400 : 500;
+  const status = databaseErrorStatus(error) || (error.name === 'SequelizeValidationError' ? 400 : 500);
   return res.status(status).json({ error: error.message });
 };
 
 const includeRelations = [
   { model: Reserva, as: 'reserva' },
-  { model: Cliente, as: 'cliente' },
 ];
 
 export const listarCheckIns = async (req, res) => {
@@ -39,17 +38,17 @@ export const criarCheckIn = async (req, res) => {
 
     const checkIn = firstProcedureRow(
       await callProcedure(
-        'CALL sp_criar_check_in(:reservaId, :clienteId, :hospede, :quarto, :data, :horario, :status, :telefone)',
+        'CALL sp_criar_check_in(:reservaId, :hospede, :quarto, :data, :horario, :status, :telefone)',
         {
           reservaId: req.body.reservaId ?? null,
-          clienteId: req.body.clienteId ?? null,
           hospede,
           quarto,
           data,
           horario: req.body.horario || null,
           status: req.body.status || null,
           telefone: req.body.telefone || null,
-        }
+        },
+        req.user
       )
     );
     return res.status(201).json(checkIn);
@@ -64,7 +63,7 @@ export const atualizarCheckIn = async (req, res) => {
       await callProcedure('CALL sp_atualizar_check_in(:id, :payload)', {
         id: req.params.id,
         payload: JSON.stringify(req.body),
-      })
+      }, req.user)
     );
     if (!checkIn) return res.status(404).json({ error: 'Check-in não encontrado.' });
     return res.json(checkIn);
@@ -78,7 +77,7 @@ export const concluirCheckIn = async (req, res) => {
     const checkIn = await CheckIn.findByPk(req.params.id);
     if (!checkIn) return res.status(404).json({ error: 'Check-in não encontrado.' });
 
-    const updatedCheckIn = firstProcedureRow(await callProcedure('CALL sp_concluir_check_in(:id)', { id: req.params.id }));
+    const updatedCheckIn = firstProcedureRow(await callProcedure('CALL sp_concluir_check_in(:id)', { id: req.params.id }, req.user));
 
     return res.json(updatedCheckIn);
   } catch (error) {
@@ -88,7 +87,7 @@ export const concluirCheckIn = async (req, res) => {
 
 export const removerCheckIn = async (req, res) => {
   try {
-    const result = firstProcedureRow(await callProcedure('CALL sp_remover_check_in(:id)', { id: req.params.id }));
+    const result = firstProcedureRow(await callProcedure('CALL sp_remover_check_in(:id)', { id: req.params.id }, req.user));
     if (!result?.affectedRows) return res.status(404).json({ error: 'Check-in não encontrado.' });
     return res.status(204).send();
   } catch (error) {

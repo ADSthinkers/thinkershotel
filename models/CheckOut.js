@@ -13,10 +13,6 @@ const CheckOut = sequelize.define(
       type: DataTypes.INTEGER,
       allowNull: true,
     },
-    clienteId: {
-      type: DataTypes.INTEGER,
-      allowNull: true,
-    },
     hospede: {
       type: DataTypes.STRING,
       allowNull: false,
