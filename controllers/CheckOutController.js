@@ -1,4 +1,5 @@
 import { CheckOut, Cliente, Reserva } from '../models/index.js';
+import { callProcedure, firstProcedureRow } from '../config/dbProcedures.js';
 
 const handleError = (res, error) => {
   const status = error.name === 'SequelizeValidationError' ? 400 : 500;
@@ -36,7 +37,21 @@ export const criarCheckOut = async (req, res) => {
       return res.status(400).json({ error: 'hospede, quarto e data são obrigatórios.' });
     }
 
-    const checkOut = await CheckOut.create(req.body);
+    const checkOut = firstProcedureRow(
+      await callProcedure(
+        'CALL sp_criar_check_out(:reservaId, :clienteId, :hospede, :quarto, :data, :horario, :status, :telefone)',
+        {
+          reservaId: req.body.reservaId ?? null,
+          clienteId: req.body.clienteId ?? null,
+          hospede,
+          quarto,
+          data,
+          horario: req.body.horario || null,
+          status: req.body.status || null,
+          telefone: req.body.telefone || null,
+        }
+      )
+    );
     return res.status(201).json(checkOut);
   } catch (error) {
     return handleError(res, error);
@@ -45,10 +60,13 @@ export const criarCheckOut = async (req, res) => {
 
 export const atualizarCheckOut = async (req, res) => {
   try {
-    const checkOut = await CheckOut.findByPk(req.params.id);
+    const checkOut = firstProcedureRow(
+      await callProcedure('CALL sp_atualizar_check_out(:id, :payload)', {
+        id: req.params.id,
+        payload: JSON.stringify(req.body),
+      })
+    );
     if (!checkOut) return res.status(404).json({ error: 'Check-out não encontrado.' });
-
-    await checkOut.update(req.body);
     return res.json(checkOut);
   } catch (error) {
     return handleError(res, error);
@@ -60,12 +78,9 @@ export const concluirCheckOut = async (req, res) => {
     const checkOut = await CheckOut.findByPk(req.params.id);
     if (!checkOut) return res.status(404).json({ error: 'Check-out não encontrado.' });
 
-    await checkOut.update({ status: 'Concluido' });
-    if (checkOut.reservaId) {
-      await Reserva.update({ status: 'Check-out' }, { where: { id: checkOut.reservaId } });
-    }
+    const updatedCheckOut = firstProcedureRow(await callProcedure('CALL sp_concluir_check_out(:id)', { id: req.params.id }));
 
-    return res.json(checkOut);
+    return res.json(updatedCheckOut);
   } catch (error) {
     return handleError(res, error);
   }
@@ -73,10 +88,8 @@ export const concluirCheckOut = async (req, res) => {
 
 export const removerCheckOut = async (req, res) => {
   try {
-    const checkOut = await CheckOut.findByPk(req.params.id);
-    if (!checkOut) return res.status(404).json({ error: 'Check-out não encontrado.' });
-
-    await checkOut.destroy();
+    const result = firstProcedureRow(await callProcedure('CALL sp_remover_check_out(:id)', { id: req.params.id }));
+    if (!result?.affectedRows) return res.status(404).json({ error: 'Check-out não encontrado.' });
     return res.status(204).send();
   } catch (error) {
     return handleError(res, error);

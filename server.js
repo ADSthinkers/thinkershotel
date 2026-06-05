@@ -9,6 +9,7 @@ import CheckInRoutes from './routes/CheckInRoutes.js';
 import CheckOutRoutes from './routes/CheckOutRoutes.js';
 import ClienteRoutes from './routes/ClienteRoutes.js';
 import ReservaRoutes from './routes/ReservaRoutes.js';
+import RelatorioRoutes from './routes/RelatorioRoutes.js';
 
 const app = express();
 const PORT = process.env.PORT || 5001;
@@ -25,6 +26,7 @@ app.use('/api/clientes', ClienteRoutes);
 app.use('/api/reservas', ReservaRoutes);
 app.use('/api/check-ins', CheckInRoutes);
 app.use('/api/check-outs', CheckOutRoutes);
+app.use('/api/relatorios', RelatorioRoutes);
 
 app.use((req, res) => {
   res.status(404).json({ error: 'Rota não encontrada.' });
