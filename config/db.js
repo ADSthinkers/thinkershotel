@@ -44,15 +44,17 @@ const connectDB = async () => {
     await sequelize.sync();
     console.log('📦 Tabelas Sequelize verificadas/sincronizadas.');
 
-    const setupStatus = await setupDatabaseObjects(sequelize);
-    console.log('📊 Objetos adicionais do banco configurados:');
-    console.log(`   • Tabela de usuários: ${setupStatus.systemUsersTable}`);
-    console.log(`   • Usuário padrão: admin/admin`);
-    console.log(`   • Tabela de logs: ${setupStatus.activityLogTable}`);
-    console.log(`   • Triggers de logs: ${setupStatus.activityLogTriggers}`);
-    console.log(`   • Relatório legado removido: ${setupStatus.legacyReportTableRemoved ? 'sim' : 'não'}`);
-    console.log(`   • Relacionamentos/FKs: ${setupStatus.relationships}`);
-    console.log(`   • Stored procedures: ${setupStatus.storedProcedures}`);
+    if (databaseStatus.created) {
+      const setupStatus = await setupDatabaseObjects(sequelize);
+      console.log('📊 Objetos iniciais do banco configurados:');
+      console.log(`   • Tabela de usuários: ${setupStatus.systemUsersTable}`);
+      console.log(`   • Usuário padrão: admin/admin`);
+      console.log(`   • Tabela de logs: ${setupStatus.activityLogTable}`);
+      console.log(`   • Triggers de logs: ${setupStatus.activityLogTriggers}`);
+      console.log(`   • Stored procedures: ${setupStatus.storedProcedures}`);
+    } else {
+      console.log('📊 Banco já existente; bootstrap inicial de triggers/procedures ignorado.');
+    }
 
   } catch (error) {
     console.error('❌ Erro ao conectar/configurar o MySQL:', error.message || error);

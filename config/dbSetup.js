@@ -12,30 +12,6 @@ const ACTIVITY_LOG_TABLES = {
   usuarios_sistema: ['id', 'login', 'nome', 'perfil', 'ativo', 'criado_em', 'atualizado_em'],
 };
 
-const FOREIGN_KEYS = [
-  {
-    name: 'fk_reservas_cliente',
-    table: 'reservas',
-    column: 'clienteId',
-    referenceTable: 'clientes',
-    referenceColumn: 'id',
-  },
-  {
-    name: 'fk_check_ins_reserva',
-    table: 'check_ins',
-    column: 'reservaId',
-    referenceTable: 'reservas',
-    referenceColumn: 'id',
-  },
-  {
-    name: 'fk_check_outs_reserva',
-    table: 'check_outs',
-    column: 'reservaId',
-    referenceTable: 'reservas',
-    referenceColumn: 'id',
-  },
-];
-
 function assertValidDatabaseName(dbName) {
   if (!dbName || !/^[a-zA-Z0-9_$]+$/.test(dbName)) {
     throw new Error('DB_NAME inválido. Use apenas letras, números, "_" ou "$".');
@@ -61,7 +37,7 @@ function valuesForActivityLog(tableName, operation, registroId, oldData, newData
   `;
 }
 
-async function recreateActivityLogTrigger(sequelize, tableName, operation) {
+async function createActivityLogTrigger(sequelize, tableName, operation) {
   const triggerName = `trg_${tableName}_${operation.toLowerCase()}_log_atividade`;
   const columns = ACTIVITY_LOG_TABLES[tableName];
   const timing = operation === 'DELETE' ? 'BEFORE' : 'AFTER';
@@ -69,7 +45,6 @@ async function recreateActivityLogTrigger(sequelize, tableName, operation) {
   const newData = operation === 'DELETE' ? 'NULL' : `JSON_OBJECT(${jsonObjectFromColumns('NEW', columns)})`;
   const registroId = operation === 'DELETE' ? 'OLD.id' : 'NEW.id';
 
-  await sequelize.query(`DROP TRIGGER IF EXISTS \`${triggerName}\``);
   await sequelize.query(`
     CREATE TRIGGER \`${triggerName}\`
     ${timing} ${operation} ON \`${tableName}\`
@@ -147,142 +122,13 @@ async function createSystemUsersTable(sequelize) {
 
 async function createActivityLogTriggers(sequelize) {
   for (const tableName of Object.keys(ACTIVITY_LOG_TABLES)) {
-    await recreateActivityLogTrigger(sequelize, tableName, 'INSERT');
-    await recreateActivityLogTrigger(sequelize, tableName, 'UPDATE');
-    await recreateActivityLogTrigger(sequelize, tableName, 'DELETE');
-  }
-}
-
-async function dropReportTriggers(sequelize) {
-  for (const tableName of Object.keys(TABLES)) {
-    await sequelize.query(`DROP TRIGGER IF EXISTS \`trg_${tableName}_insert_relatorio\``);
-    await sequelize.query(`DROP TRIGGER IF EXISTS \`trg_${tableName}_update_relatorio\``);
-    await sequelize.query(`DROP TRIGGER IF EXISTS \`trg_${tableName}_delete_relatorio\``);
-  }
-}
-
-async function dropLegacyReportTable(sequelize) {
-  await dropReportTriggers(sequelize);
-  await sequelize.query('DROP TABLE IF EXISTS relatorio_dados_bd');
-}
-
-async function dropActivityLogTriggers(sequelize) {
-  for (const tableName of Object.keys(ACTIVITY_LOG_TABLES)) {
-    await sequelize.query(`DROP TRIGGER IF EXISTS \`trg_${tableName}_insert_log_atividade\``);
-    await sequelize.query(`DROP TRIGGER IF EXISTS \`trg_${tableName}_update_log_atividade\``);
-    await sequelize.query(`DROP TRIGGER IF EXISTS \`trg_${tableName}_delete_log_atividade\``);
-  }
-}
-
-async function dropExistingForeignKeysForColumn(sequelize, tableName, columnName) {
-  const [constraints] = await sequelize.query(
-    `
-      SELECT CONSTRAINT_NAME AS constraintName
-      FROM information_schema.KEY_COLUMN_USAGE
-      WHERE TABLE_SCHEMA = DATABASE()
-        AND TABLE_NAME = ?
-        AND COLUMN_NAME = ?
-        AND REFERENCED_TABLE_NAME IS NOT NULL
-    `,
-    { replacements: [tableName, columnName] }
-  );
-
-  for (const constraint of constraints) {
-    await sequelize.query(`ALTER TABLE \`${tableName}\` DROP FOREIGN KEY \`${constraint.constraintName}\``);
-  }
-}
-
-async function columnExists(sequelize, tableName, columnName) {
-  const [columns] = await sequelize.query(
-    `
-      SELECT COLUMN_NAME
-      FROM information_schema.COLUMNS
-      WHERE TABLE_SCHEMA = DATABASE()
-        AND TABLE_NAME = ?
-        AND COLUMN_NAME = ?
-      LIMIT 1
-    `,
-    { replacements: [tableName, columnName] }
-  );
-
-  return columns.length > 0;
-}
-
-async function removeObsoleteClientLinksFromCheckTables(sequelize) {
-  const obsoleteColumns = [
-    { table: 'check_ins', column: 'clienteId' },
-    { table: 'check_outs', column: 'clienteId' },
-  ];
-
-  for (const obsoleteColumn of obsoleteColumns) {
-    if (!(await columnExists(sequelize, obsoleteColumn.table, obsoleteColumn.column))) {
-      continue;
-    }
-
-    await dropExistingForeignKeysForColumn(sequelize, obsoleteColumn.table, obsoleteColumn.column);
-    await sequelize.query(`ALTER TABLE \`${obsoleteColumn.table}\` DROP COLUMN \`${obsoleteColumn.column}\``);
-  }
-}
-
-async function assertNoOrphanRecords(sequelize, foreignKey) {
-  const [rows] = await sequelize.query(
-    `
-      SELECT COUNT(*) AS total
-      FROM \`${foreignKey.table}\` child
-      LEFT JOIN \`${foreignKey.referenceTable}\` parent
-        ON child.\`${foreignKey.column}\` = parent.\`${foreignKey.referenceColumn}\`
-      WHERE child.\`${foreignKey.column}\` IS NOT NULL
-        AND parent.\`${foreignKey.referenceColumn}\` IS NULL
-    `
-  );
-
-  const total = Number(rows[0]?.total || 0);
-  if (total > 0) {
-    throw new Error(
-      `Não foi possível criar a relação ${foreignKey.name}: existem ${total} registro(s) órfão(s) em ${foreignKey.table}.${foreignKey.column}.`
-    );
-  }
-}
-
-async function createForeignKeyRelationships(sequelize) {
-  for (const foreignKey of FOREIGN_KEYS) {
-    await assertNoOrphanRecords(sequelize, foreignKey);
-    await dropExistingForeignKeysForColumn(sequelize, foreignKey.table, foreignKey.column);
-
-    await sequelize.query(`
-      ALTER TABLE \`${foreignKey.table}\`
-      ADD CONSTRAINT \`${foreignKey.name}\`
-      FOREIGN KEY (\`${foreignKey.column}\`)
-      REFERENCES \`${foreignKey.referenceTable}\` (\`${foreignKey.referenceColumn}\`)
-      ON UPDATE CASCADE
-      ON DELETE RESTRICT
-    `);
+    await createActivityLogTrigger(sequelize, tableName, 'INSERT');
+    await createActivityLogTrigger(sequelize, tableName, 'UPDATE');
+    await createActivityLogTrigger(sequelize, tableName, 'DELETE');
   }
 }
 
 async function createStoredProcedures(sequelize) {
-  const procedures = [
-    'sp_criar_cliente',
-    'sp_atualizar_cliente',
-    'sp_remover_cliente',
-    'sp_criar_reserva',
-    'sp_atualizar_reserva',
-    'sp_cancelar_reserva',
-    'sp_remover_reserva',
-    'sp_criar_check_in',
-    'sp_atualizar_check_in',
-    'sp_concluir_check_in',
-    'sp_remover_check_in',
-    'sp_criar_check_out',
-    'sp_atualizar_check_out',
-    'sp_concluir_check_out',
-    'sp_remover_check_out',
-  ];
-
-  for (const procedure of procedures) {
-    await sequelize.query(`DROP PROCEDURE IF EXISTS \`${procedure}\``);
-  }
-
   await sequelize.query(`
     CREATE PROCEDURE sp_criar_cliente(
       IN p_nome VARCHAR(255),
@@ -542,20 +388,14 @@ export async function ensureDatabaseExists() {
 
 export async function setupDatabaseObjects(sequelize) {
   await createSystemUsersTable(sequelize);
-  await dropLegacyReportTable(sequelize);
   await createActivityLogTable(sequelize);
-  await dropActivityLogTriggers(sequelize);
-  await removeObsoleteClientLinksFromCheckTables(sequelize);
   await createActivityLogTriggers(sequelize);
-  await createForeignKeyRelationships(sequelize);
   await createStoredProcedures(sequelize);
 
   return {
     systemUsersTable: 'usuarios_sistema',
     activityLogTable: 'logs_atividades',
     activityLogTriggers: Object.keys(ACTIVITY_LOG_TABLES).length * 3,
-    legacyReportTableRemoved: true,
-    relationships: FOREIGN_KEYS.length,
     storedProcedures: 15,
   };
 }
